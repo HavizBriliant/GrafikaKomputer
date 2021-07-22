@@ -485,3 +485,80 @@ void keyboard(unsigned char key, int x, int y)
          break;
    }
 } 
+
+void main()
+{
+   vec4 pos = vec4(in_position.x, in_position.y, in_position.z, 1.0);
+   out_world_pos = Model * pos;
+   gl_Position = Projection * View * out_world_pos;
+ 
+   [...]
+ 
+   out_light_space_pos = LightViewProjection * out_world_pos;
+} 
+
+float
+compute_shadow_factor(vec4 light_space_pos, sampler2D shadow_map)
+{
+   // Convert light space position to NDC
+   vec3 light_space_ndc = light_space_pos.xyz /= light_space_pos.w;
+ 
+   // If the fragment is outside the light's projection then it is outside
+   // the light's influence, which means it is in the shadow (notice that
+   // such sample would be outside the shadow map image)
+   if (abs(light_space_ndc.x) > 1.0 ||
+       abs(light_space_ndc.y) > 1.0 ||
+       abs(light_space_ndc.z) > 1.0)
+      return 0.0;
+ 
+   // Translate from NDC to shadow map space (Vulkan's Z is already in [0..1])
+   vec2 shadow_map_coord = light_space_ndc.xy * 0.5 + 0.5;
+ 
+   // Check if the sample is in the light or in the shadow
+   if (light_space_ndc.z > texture(shadow_map, shadow_map_coord.xy).x)
+      return 0.0; // In the shadow
+ 
+   // In the light
+   return 1.0;
+}  
+
+VkSampler sampler;
+VkSamplerCreateInfo sampler_info = {};
+sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+sampler_info.anisotropyEnable = false;
+sampler_info.maxAnisotropy = 1.0f;
+sampler_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+sampler_info.unnormalizedCoordinates = false;
+sampler_info.compareEnable = false;
+sampler_info.compareOp = VK_COMPARE_OP_ALWAYS;
+sampler_info.magFilter = VK_FILTER_LINEAR;
+sampler_info.minFilter = VK_FILTER_LINEAR;
+sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+sampler_info.mipLodBias = 0.0f;
+sampler_info.minLod = 0.0f;
+sampler_info.maxLod = 100.0f;
+ 
+VkResult result =
+   vkCreateSampler(device, &sampler_info, NULL, &sampler);
+   
+   VkDescriptorImageInfo image_info;
+image_info.sampler = sampler;
+image_info.imageView = shadow_map_view;
+image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+ 
+VkWriteDescriptorSet writes;
+writes.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+writes.pNext = NULL;
+writes.dstSet = image_descriptor_set;
+writes.dstBinding = 0;
+writes.dstArrayElement = 0;
+writes.descriptorCount = 1;
+writes.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+writes.pBufferInfo = NULL;
+writes.pImageInfo = &image_info;
+writes.pTexelBufferView = NULL;
+ 
+vkUpdateDescriptorSets(ctx->device, 1, &writes, 0, NULL);
